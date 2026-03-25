@@ -1,0 +1,34 @@
+# Paths can be absolute, or relative to the project root.
+paths:
+  images_dir: ./demo_inputs/colmap_images
+  output_dir: ./outputs/demo_colmap
+
+runtime:
+  seed: 42
+  # auto / cpu / cuda
+  device: auto
+
+model:
+  # If this local path exists, the script will load from here first.
+  # Set to null to force loading from Hugging Face.
+  local_model_path: ./weights/map-anything
+  # Optional explicit Hugging Face model name.
+  # Leave null to use the default selected by use_apache.
+  hf_model_name: null
+  use_apache: false
+
+inference:
+  memory_efficient_inference: true
+  minibatch_size: 1
+  use_amp: true
+  # Common values: bf16 / fp16
+  amp_dtype: bf16
+  apply_mask: true
+  mask_edges: true
+
+export:
+  # If voxel_size is not null, it overrides voxel_fraction.
+  voxel_fraction: 0.01
+  voxel_size: null
+  save_glb: false
+  skip_point2d: false

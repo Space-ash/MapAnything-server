@@ -10,7 +10,8 @@ This script runs MapAnything inference on images and exports the results
 to COLMAP format with scene-adaptive voxel downsampling.
 
 Usage:
-    python demo_colmap.py --images_dir=/path/to/images/ --output_dir=/path/to/output/
+    python scripts/demo_colmap.py
+    python scripts/demo_colmap.py --config configs/demo_colmap_config.yaml
 
 Output structure:
     output_dir/
@@ -28,11 +29,17 @@ Output structure:
 import argparse
 import glob
 import os
+import sys
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 import numpy as np
 import torch
+import yaml
 
 from mapanything.models import MapAnything
 from mapanything.utils.colmap_export import export_predictions_to_colmap
@@ -46,6 +53,78 @@ if torch.cuda.is_available():
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.deterministic = False
 
+DEFAULT_CONFIG_PATH = os.path.join(PROJECT_ROOT, "configs", "demo_colmap_config.yaml")
+DEFAULT_CONFIG = {
+    "paths": {
+        "images_dir": None,
+        "output_dir": None,
+    },
+    "runtime": {
+        "seed": 42,
+        "device": "auto",
+    },
+    "model": {
+        "use_apache": False,
+        "local_model_path": "./weights/map-anything",
+        "hf_model_name": None,
+    },
+    "inference": {
+        "memory_efficient_inference": True,
+        "minibatch_size": 1,
+        "use_amp": True,
+        "amp_dtype": "bf16",
+        "apply_mask": True,
+        "mask_edges": True,
+    },
+    "export": {
+        "voxel_fraction": 0.01,
+        "voxel_size": None,
+        "save_glb": False,
+        "skip_point2d": False,
+    },
+}
+
+
+def _deep_update(base, updates):
+    merged = dict(base)
+    for key, value in updates.items():
+        if (
+            key in merged
+            and isinstance(merged[key], dict)
+            and isinstance(value, dict)
+        ):
+            merged[key] = _deep_update(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _resolve_project_path(path_value):
+    if path_value is None:
+        return None
+    if os.path.isabs(path_value):
+        return path_value
+    return os.path.abspath(os.path.join(PROJECT_ROOT, path_value))
+
+
+def _resolve_device(device_name):
+    if device_name == "auto":
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    return device_name
+
+
+def load_config(config_path):
+    if not os.path.isfile(config_path):
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        user_config = yaml.safe_load(f) or {}
+
+    if not isinstance(user_config, dict):
+        raise ValueError("Config file must contain a YAML mapping at the top level.")
+
+    return _deep_update(DEFAULT_CONFIG, user_config)
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -53,103 +132,221 @@ def parse_args():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
+        "--config",
+        type=str,
+        default=DEFAULT_CONFIG_PATH,
+        help="YAML config file path",
+    )
+    parser.add_argument(
         "--images_dir",
         type=str,
-        required=True,
-        help="Directory containing input images",
+        default=None,
+        help="Override config: directory containing input images",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
-        required=True,
-        help="Directory to save COLMAP output (will contain images/ and sparse/ subfolders)",
+        default=None,
+        help="Override config: directory to save COLMAP output",
     )
     parser.add_argument(
         "--seed",
         type=int,
-        default=42,
-        help="Random seed for reproducibility",
+        default=None,
+        help="Override config: random seed for reproducibility",
     )
     parser.add_argument(
         "--voxel_fraction",
         type=float,
-        default=0.01,
-        help="Fraction of IQR-based scene extent for voxel size (0.01 = 1%%)",
+        default=None,
+        help="Override config: adaptive voxel fraction",
     )
     parser.add_argument(
         "--voxel_size",
         type=float,
         default=None,
-        help="Explicit voxel size in meters (overrides --voxel_fraction)",
+        help="Override config: explicit voxel size in meters",
     )
     parser.add_argument(
         "--apache",
-        action="store_true",
-        help="Use Apache 2.0 licensed model (facebook/map-anything-apache)",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Override config: use Apache 2.0 licensed model",
     )
     parser.add_argument(
         "--save_glb",
-        action="store_true",
-        default=False,
-        help="Also save dense reconstruction as GLB file",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Override config: also save dense reconstruction as GLB file",
     )
     parser.add_argument(
         "--skip_point2d",
-        action="store_true",
-        default=False,
-        help="Skip Point2D backprojection for faster export (some tools may require Point2D)",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Override config: skip Point2D backprojection for faster export",
+    )
+    parser.add_argument(
+        "--local_model_path",
+        type=str,
+        default=None,
+        help="Override config: local pretrained model directory",
+    )
+    parser.add_argument(
+        "--hf_model_name",
+        type=str,
+        default=None,
+        help="Override config: Hugging Face model name",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="Override config: device to use (auto/cpu/cuda)",
+    )
+    parser.add_argument(
+        "--minibatch_size",
+        type=int,
+        default=None,
+        help="Override config: inference minibatch size",
+    )
+    parser.add_argument(
+        "--use_amp",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Override config: enable AMP during inference",
+    )
+    parser.add_argument(
+        "--amp_dtype",
+        type=str,
+        default=None,
+        help="Override config: AMP dtype (bf16/fp16)",
+    )
+    parser.add_argument(
+        "--apply_mask",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Override config: apply model mask during inference",
+    )
+    parser.add_argument(
+        "--mask_edges",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Override config: mask edges during inference",
+    )
+    parser.add_argument(
+        "--memory_efficient_inference",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Override config: enable memory-efficient inference",
     )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    config_path = (
+        args.config
+        if os.path.isabs(args.config)
+        else os.path.abspath(args.config)
+    )
+    config = load_config(config_path)
+
+    if args.images_dir is not None:
+        config["paths"]["images_dir"] = args.images_dir
+    if args.output_dir is not None:
+        config["paths"]["output_dir"] = args.output_dir
+    if args.seed is not None:
+        config["runtime"]["seed"] = args.seed
+    if args.device is not None:
+        config["runtime"]["device"] = args.device
+    if args.apache is not None:
+        config["model"]["use_apache"] = args.apache
+    if args.local_model_path is not None:
+        config["model"]["local_model_path"] = args.local_model_path
+    if args.hf_model_name is not None:
+        config["model"]["hf_model_name"] = args.hf_model_name
+    if args.minibatch_size is not None:
+        config["inference"]["minibatch_size"] = args.minibatch_size
+    if args.use_amp is not None:
+        config["inference"]["use_amp"] = args.use_amp
+    if args.amp_dtype is not None:
+        config["inference"]["amp_dtype"] = args.amp_dtype
+    if args.apply_mask is not None:
+        config["inference"]["apply_mask"] = args.apply_mask
+    if args.mask_edges is not None:
+        config["inference"]["mask_edges"] = args.mask_edges
+    if args.memory_efficient_inference is not None:
+        config["inference"]["memory_efficient_inference"] = (
+            args.memory_efficient_inference
+        )
+    if args.voxel_fraction is not None:
+        config["export"]["voxel_fraction"] = args.voxel_fraction
+    if args.voxel_size is not None:
+        config["export"]["voxel_size"] = args.voxel_size
+    if args.save_glb is not None:
+        config["export"]["save_glb"] = args.save_glb
+    if args.skip_point2d is not None:
+        config["export"]["skip_point2d"] = args.skip_point2d
+
+    images_dir = _resolve_project_path(config["paths"]["images_dir"])
+    output_dir = _resolve_project_path(config["paths"]["output_dir"])
+    model_path = _resolve_project_path(config["model"]["local_model_path"])
+    seed = config["runtime"]["seed"]
+    device = _resolve_device(config["runtime"]["device"])
+    inference_cfg = config["inference"]
+    export_cfg = config["export"]
+
+    if images_dir is None:
+        raise ValueError("Please set paths.images_dir in the YAML config or via --images_dir.")
+    if output_dir is None:
+        raise ValueError("Please set paths.output_dir in the YAML config or via --output_dir.")
 
     # Print configuration
     print("=" * 60)
     print("MapAnything COLMAP Export")
     print("=" * 60)
-    print(f"Input images: {args.images_dir}")
-    print(f"Output directory: {args.output_dir}")
-    if args.voxel_size is not None:
-        print(f"Voxel size: {args.voxel_size}m (explicit)")
+    print(f"Config file: {config_path}")
+    print(f"Input images: {images_dir}")
+    print(f"Output directory: {output_dir}")
+    if export_cfg["voxel_size"] is not None:
+        print(f"Voxel size: {export_cfg['voxel_size']}m (explicit)")
     else:
-        print(f"Voxel fraction: {args.voxel_fraction} (adaptive)")
-    print(f"Random seed: {args.seed}")
+        print(f"Voxel fraction: {export_cfg['voxel_fraction']} (adaptive)")
+    print(f"Random seed: {seed}")
 
     # Set seed for reproducibility
-    seed_everything(args.seed)
-
-    # Set device
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    seed_everything(seed)
     print(f"Using device: {device}")
 
     # Initialize model
-    if args.apache:
-        model_name = "facebook/map-anything-apache"
-        print("Loading Apache 2.0 licensed MapAnything model...")
+    if model_path is not None and os.path.isdir(model_path):
+        print(f"Loading local MapAnything model from: {model_path}")
+        model = MapAnything.from_pretrained(model_path).to(device)
     else:
-        model_name = "facebook/map-anything"
-        print("Loading CC-BY-NC 4.0 licensed MapAnything model...")
+        if config["model"]["hf_model_name"]:
+            model_name = config["model"]["hf_model_name"]
+        elif config["model"]["use_apache"]:
+            model_name = "facebook/map-anything-apache"
+        else:
+            model_name = "facebook/map-anything"
 
-    # model = MapAnything.from_pretrained(model_name).to(device)
-    local_model_path = "./weights/map-anything"
-    model = MapAnything.from_pretrained(local_model_path).to(device)
+        print(f"Loading MapAnything model from Hugging Face: {model_name}")
+        model = MapAnything.from_pretrained(model_name).to(device)
     model.eval()
     print("Model loaded successfully!")
 
     # Get image paths
-    if not os.path.isdir(args.images_dir):
-        raise ValueError(f"Images directory not found: {args.images_dir}")
+    if not os.path.isdir(images_dir):
+        raise ValueError(f"Images directory not found: {images_dir}")
 
     image_extensions = ["*.jpg", "*.jpeg", "*.png", "*.JPG", "*.JPEG", "*.PNG"]
     image_path_list = []
     for ext in image_extensions:
-        image_path_list.extend(glob.glob(os.path.join(args.images_dir, ext)))
+        image_path_list.extend(glob.glob(os.path.join(images_dir, ext)))
     image_path_list = sorted(image_path_list)
 
     if len(image_path_list) == 0:
-        raise ValueError(f"No images found in {args.images_dir}")
+        raise ValueError(f"No images found in {images_dir}")
 
     print(f"Found {len(image_path_list)} images")
 
@@ -166,17 +363,17 @@ def main():
     with torch.no_grad():
         outputs = model.infer(
             views,
-            memory_efficient_inference=True,
-            minibatch_size=1,
-            use_amp=True,
-            amp_dtype="bf16",
-            apply_mask=True,
-            mask_edges=True,
+            memory_efficient_inference=inference_cfg["memory_efficient_inference"],
+            minibatch_size=inference_cfg["minibatch_size"],
+            use_amp=inference_cfg["use_amp"],
+            amp_dtype=inference_cfg["amp_dtype"],
+            apply_mask=inference_cfg["apply_mask"],
+            mask_edges=inference_cfg["mask_edges"],
         )
     print("Inference complete!")
 
     # Create output directory
-    os.makedirs(args.output_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
 
     # Export to COLMAP format (includes saving processed images)
     print("Exporting to COLMAP format...")
@@ -184,20 +381,20 @@ def main():
         outputs=outputs,
         processed_views=views,
         image_names=image_names,
-        output_dir=args.output_dir,
-        voxel_fraction=args.voxel_fraction,
-        voxel_size=args.voxel_size,
+        output_dir=output_dir,
+        voxel_fraction=export_cfg["voxel_fraction"],
+        voxel_size=export_cfg["voxel_size"],
         data_norm_type=model.encoder.data_norm_type,
         save_ply=True,
         save_images=True,
-        skip_point2d=args.skip_point2d,
+        skip_point2d=export_cfg["skip_point2d"],
     )
 
-    print(f"COLMAP reconstruction saved to: {args.output_dir}")
+    print(f"COLMAP reconstruction saved to: {output_dir}")
 
     # Export GLB if requested
-    if args.save_glb:
-        glb_output_path = os.path.join(args.output_dir, "dense_mesh.glb")
+    if export_cfg["save_glb"]:
+        glb_output_path = os.path.join(output_dir, "dense_mesh.glb")
         print(f"Saving GLB file to: {glb_output_path}")
 
         # Collect data for GLB export
