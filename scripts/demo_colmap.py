@@ -56,6 +56,7 @@ if torch.cuda.is_available():
 DEFAULT_CONFIG_PATH = os.path.join(PROJECT_ROOT, "configs", "demo_colmap_config.yaml")
 DEFAULT_CONFIG = {
     "paths": {
+        "scene_name": None,
         "images_dir": None,
         "output_dir": None,
     },
@@ -136,6 +137,12 @@ def parse_args():
         type=str,
         default=DEFAULT_CONFIG_PATH,
         help="YAML config file path",
+    )
+    parser.add_argument(
+        "--scene_name",
+        type=str,
+        default=None,
+        help="Override config: scene name for formatting paths",
     )
     parser.add_argument(
         "--images_dir",
@@ -251,6 +258,8 @@ def main():
     )
     config = load_config(config_path)
 
+    if args.scene_name is not None:
+        config["paths"]["scene_name"] = args.scene_name
     if args.images_dir is not None:
         config["paths"]["images_dir"] = args.images_dir
     if args.output_dir is not None:
@@ -287,6 +296,16 @@ def main():
         config["export"]["save_glb"] = args.save_glb
     if args.skip_point2d is not None:
         config["export"]["skip_point2d"] = args.skip_point2d
+
+    scene_name = config["paths"].get("scene_name")
+    if scene_name:
+        raw_images_dir = config["paths"].get("images_dir")
+        if raw_images_dir and "{scene_name}" in raw_images_dir:
+            config["paths"]["images_dir"] = raw_images_dir.format(scene_name=scene_name)
+
+        raw_output_dir = config["paths"].get("output_dir")
+        if raw_output_dir and "{scene_name}" in raw_output_dir:
+            config["paths"]["output_dir"] = raw_output_dir.format(scene_name=scene_name)
 
     images_dir = _resolve_project_path(config["paths"]["images_dir"])
     output_dir = _resolve_project_path(config["paths"]["output_dir"])

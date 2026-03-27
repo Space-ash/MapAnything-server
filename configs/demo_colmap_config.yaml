@@ -1,7 +1,8 @@
 # Paths can be absolute, or relative to the project root.
 paths:
-  images_dir: ./demo_inputs/colmap_images
-  output_dir: ./outputs/demo_colmap
+  scene_name: "electro/electro_dslr_undistorted"
+  images_dir: "../ETH3D/{scene_name}/images"
+  output_dir: "./outputs/{scene_name}"
 
 runtime:
   seed: 42
